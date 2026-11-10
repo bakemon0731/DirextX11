@@ -59,7 +59,7 @@ float4 PS(VS_OUTPUT input) : SV_Target
     return texColor * finalBrightness;
 }
 
-// 敵用のピクセルシェーダー（例：緑色）
+// 敵用のピクセルシェーダー
 float4 PS_Enemy(VS_OUTPUT input) : SV_Target
 {
     float3 lightDir = normalize(float3(1.0f, 1.0f, -1.0f));
@@ -70,7 +70,32 @@ float4 PS_Enemy(VS_OUTPUT input) : SV_Target
 
     // 単色のかわりにテクスチャから色を取得
     float4 texColor = g_Texture.Sample(g_Sampler, input.uv);
+    float4 finalColor = texColor * finalBrightness;
     
-    return texColor * finalBrightness;
+    // 敵オブジェクトの色合いを赤寄りに補正するエフェクト
+    finalColor.r *= 1.4f;
+    return finalColor;
+}
+
+// ----------------------------------------------------
+// ゲームオーバー/リザルト用（モノクロ・グレースケール化シェーダー）
+// ----------------------------------------------------
+float4 PS_Monochrome(VS_OUTPUT input) : SV_Target
+{
+    float3 lightDir = normalize(float3(1.0f, 1.0f, -1.0f));
+    float3 normal = normalize(input.normal);
+    float lightIntensity = saturate(dot(normal, lightDir));
+    float ambient = 0.3f;
+    float finalBrightness = lightIntensity + ambient;
+    
+    float4 texColor = g_Texture.Sample(g_Sampler, input.uv);
+    float4 color = texColor * finalBrightness;
+    
+    // NTSC系数による正確な輝度（モノクロ）計算
+    float gray = dot(color.rgb, float3(0.299f, 0.587f, 0.114f));
+    
+    // モノクロカラーを出力 (RGBをすべて gray に統一)
+    return float4(gray, gray, gray, color.a);
+
 }
 
