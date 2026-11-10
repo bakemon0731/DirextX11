@@ -8,7 +8,7 @@ public:
     Player();
     ~Player();
 
-    // ★デルタタイムを受け取れるように引数を追加
+    // デルタタイムを受け取れるように引数を追加
     void Update(float deltaTime);
     DirectX::XMMATRIX GetWorldMatrix(float t);
 
@@ -18,5 +18,5 @@ public:
 private:
     float m_posX;
     float m_posY;
-    float m_speed; // ★移動スピードの追加
+    float m_speed; // 移動スピードの追加
 };

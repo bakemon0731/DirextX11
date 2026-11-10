@@ -1,15 +1,16 @@
-﻿
-
-
-#include <windows.h>
+﻿#include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h> 
 #include <directxmath.h> 
-#include <memory>     
-#include <string>     
+#include <memory>     // std::unique_ptr
+#include <string>     // std::wstring
+#include <vector>     // std::vector
+#include <wincodec.h> // WIC (Windows Imaging Component)
 #include "Player.h" 
 #include "Enemy.h" 
 #include "Graphics.h" 
+
+#pragma comment(lib, "windowscodecs.lib")
 
 using namespace DirectX;
 
@@ -18,10 +19,13 @@ const UINT SCREEN_HEIGHT = 600;
 
 ID3D11VertexShader* g_pVertexShader = nullptr;
 ID3D11PixelShader* g_pPixelShader = nullptr;
-ID3D11PixelShader* g_pPixelShaderEnemy = nullptr;
+ID3D11PixelShader* g_pPixelShaderEnemy = nullptr; // 敵用ピクセルシェーダー
 ID3D11InputLayout* g_pVertexLayout = nullptr;
 ID3D11Buffer* g_pVertexBuffer = nullptr;
 ID3D11Buffer* g_pIndexBuffer = nullptr;
+ID3D11ShaderResourceView* g_pTextureRV = nullptr;  // テクスチャ
+ID3D11ShaderResourceView* g_pTextureEnemyRV = nullptr;
+ID3D11SamplerState* g_pSamplerState = nullptr;     // サンプラー
 
 struct ConstantBufferData {
     XMMATRIX mWorld;
@@ -29,9 +33,11 @@ struct ConstantBufferData {
     XMMATRIX mProjection;
 };
 
+// UV座標（tu, tv）を追加した頂点構造体
 struct SimpleVertex {
     float x, y, z;
     float nx, ny, nz;
+    float tu, tv;
 };
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -63,11 +69,9 @@ std::wstring GetExeDirPath(const wchar_t* fileName) {
     return path + fileName;
 }
 
-// シェーダーをコンパイルし、失敗したらメッセージを表示する
+// シェーダーをコンパイルする関数
 bool CompileShader(const wchar_t* fileName, const char* entry, const char* target, ID3DBlob** ppBlob) {
     ID3DBlob* pError = nullptr;
-
-    // まずexeと同じフォルダ、だめなら作業ディレクトリを探す
     std::wstring exePath = GetExeDirPath(fileName);
     HRESULT hr = D3DCompileFromFile(exePath.c_str(), nullptr, nullptr, entry, target, 0, 0, ppBlob, &pError);
     if (FAILED(hr)) {
@@ -90,67 +94,133 @@ bool CompileShader(const wchar_t* fileName, const char* entry, const char* targe
     return true;
 }
 
+// WICを使って画像ファイルを読み込み、テクスチャを生成する関数
+bool LoadTextureFromFile(ID3D11Device* pDevice, const wchar_t* filename, ID3D11ShaderResourceView** ppTextureView) {
+    IWICImagingFactory* pFactory = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pFactory));
+    if (FAILED(hr)) return false;
+
+    // exeのある場所から探す、なければそのまま
+    std::wstring fullPath = GetExeDirPath(filename);
+    IWICBitmapDecoder* pDecoder = nullptr;
+    hr = pFactory->CreateDecoderFromFilename(fullPath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &pDecoder);
+    if (FAILED(hr)) {
+        hr = pFactory->CreateDecoderFromFilename(filename, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &pDecoder);
+    }
+    if (FAILED(hr)) { pFactory->Release(); return false; }
+
+    IWICBitmapFrameDecode* pFrame = nullptr;
+    hr = pDecoder->GetFrame(0, &pFrame);
+    if (FAILED(hr)) { pDecoder->Release(); pFactory->Release(); return false; }
+
+    IWICFormatConverter* pConverter = nullptr;
+    hr = pFactory->CreateFormatConverter(&pConverter);
+    if (FAILED(hr)) { pFrame->Release(); pDecoder->Release(); pFactory->Release(); return false; }
+
+    hr = pConverter->Initialize(pFrame, GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0.0f, WICBitmapPaletteTypeMedianCut);
+    if (FAILED(hr)) { pConverter->Release(); pFrame->Release(); pDecoder->Release(); pFactory->Release(); return false; }
+
+    UINT width = 0, height = 0;
+    pConverter->GetSize(&width, &height);
+
+    std::vector<BYTE> pixels(width * height * 4);
+    hr = pConverter->CopyPixels(nullptr, width * 4, static_cast<UINT>(pixels.size()), pixels.data());
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+    D3D11_SUBRESOURCE_DATA subResource = {};
+    subResource.pSysMem = pixels.data();
+    subResource.SysMemPitch = width * 4;
+
+    ID3D11Texture2D* pTexture = nullptr;
+    hr = pDevice->CreateTexture2D(&desc, &subResource, &pTexture);
+    if (SUCCEEDED(hr)) {
+        hr = pDevice->CreateShaderResourceView(pTexture, nullptr, ppTextureView);
+        pTexture->Release();
+    }
+
+    pConverter->Release();
+    pFrame->Release();
+    pDecoder->Release();
+    pFactory->Release();
+
+    return SUCCEEDED(hr);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+    // WICを使うためのCOM初期化
+    CoInitialize(nullptr);
+
     WNDCLASSEX wcex = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr, nullptr, L"DX11Class", nullptr };
     RegisterClassEx(&wcex);
     RECT rc = { 0, 0, (LONG)SCREEN_WIDTH, (LONG)SCREEN_HEIGHT };
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    HWND hWnd = CreateWindow(L"DX11Class", L"DirectX 11 モダンC++メモリ管理", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, hInstance, nullptr);
+    HWND hWnd = CreateWindow(L"DX11Class", L"DirectX 11 統合バージョン", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, hInstance, nullptr);
     ShowWindow(hWnd, nCmdShow);
 
     Graphics graphics;
     if (!graphics.Initialize(hWnd, SCREEN_WIDTH, SCREEN_HEIGHT)) {
-        MessageBoxW(nullptr, L"Graphics::Initialize に失敗しました(DirectX11デバイスの作成エラー)", L"エラー", MB_OK);
+        MessageBoxW(nullptr, L"Graphics::Initialize に失敗しました", L"エラー", MB_OK);
+        CoUninitialize();
         return 0;
     }
 
     // ---- 頂点シェーダー ----
     ID3DBlob* pVSBlob = nullptr;
-    if (!CompileShader(L"Shader.hlsl", "VS", "vs_4_0", &pVSBlob)) { return 0; }
+    if (!CompileShader(L"Shader.hlsl", "VS", "vs_4_0", &pVSBlob)) { CoUninitialize(); return 0; }
 
     HRESULT hr = graphics.GetDevice()->CreateVertexShader(pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), nullptr, &g_pVertexShader);
     if (FAILED(hr)) {
         MessageBoxW(nullptr, L"CreateVertexShader に失敗しました", L"エラー", MB_OK);
         pVSBlob->Release();
+        CoUninitialize();
         return 0;
     }
 
+    // 入力レイアウト（POSITION, NORMAL, TEXCOORD）
     D3D11_INPUT_ELEMENT_DESC layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
-    hr = graphics.GetDevice()->CreateInputLayout(layout, 2, pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), &g_pVertexLayout);
+    hr = graphics.GetDevice()->CreateInputLayout(layout, 3, pVSBlob->GetBufferPointer(), pVSBlob->GetBufferSize(), &g_pVertexLayout);
     pVSBlob->Release();
     if (FAILED(hr)) {
         MessageBoxW(nullptr, L"CreateInputLayout に失敗しました", L"エラー", MB_OK);
+        CoUninitialize();
         return 0;
     }
 
-    // ---- ピクセルシェーダー（プレイヤー用）----
+    // ---- ピクセルシェーダー（プレイヤー用） ----
     ID3DBlob* pPSBlob = nullptr;
-    if (!CompileShader(L"Shader.hlsl", "PS", "ps_4_0", &pPSBlob)) { return 0; }
+    if (!CompileShader(L"Shader.hlsl", "PS", "ps_4_0", &pPSBlob)) { CoUninitialize(); return 0; }
     hr = graphics.GetDevice()->CreatePixelShader(pPSBlob->GetBufferPointer(), pPSBlob->GetBufferSize(), nullptr, &g_pPixelShader);
     pPSBlob->Release();
-    if (FAILED(hr)) {
-        MessageBoxW(nullptr, L"CreatePixelShader に失敗しました", L"エラー", MB_OK);
-        return 0;
-    }
+    if (FAILED(hr)) { MessageBoxW(nullptr, L"CreatePixelShader に失敗しました", L"エラー", MB_OK); CoUninitialize(); return 0; }
 
-    // ----ピクセルシェーダー（敵用）----
+    // ---- ピクセルシェーダー（敵用） ----
     ID3DBlob* pPSEnemyBlob = nullptr;
-    if (!CompileShader(L"Shader.hlsl", "PS_Enemy", "ps_4_0", &pPSEnemyBlob)) { return 0; }
+    if (!CompileShader(L"Shader.hlsl", "PS_Enemy", "ps_4_0", &pPSEnemyBlob)) { CoUninitialize(); return 0; }
     hr = graphics.GetDevice()->CreatePixelShader(pPSEnemyBlob->GetBufferPointer(), pPSEnemyBlob->GetBufferSize(), nullptr, &g_pPixelShaderEnemy);
     pPSEnemyBlob->Release();
-    if (FAILED(hr)) { MessageBoxW(nullptr, L"CreatePixelShader(Enemy) に失敗しました", L"エラー", MB_OK);
-    return 0; }
+    if (FAILED(hr)) { MessageBoxW(nullptr, L"CreatePixelShader(Enemy) に失敗しました", L"エラー", MB_OK); CoUninitialize(); return 0; }
 
+    // ---- 頂点データ（UV座標付き立方体） ----
     SimpleVertex vertices[] = {
-        { -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f }, {  0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f }, { -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f }, {  0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f },
-        {  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f }, { -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f }, {  0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f }, { -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f },
-        { -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f }, { -0.5f,  0.5f, -0.5f, -1.0f,  0.0f,  0.0f }, { -0.5f, -0.5f,  0.5f, -1.0f,  0.0f,  0.0f }, { -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f },
-        {  0.5f,  0.5f, -0.5f,  1.0f,  0.0f,  0.0f }, {  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f }, {  0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f }, {  0.5f, -0.5f,  0.5f,  1.0f,  0.0f,  0.0f },
-        { -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f }, {  0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f }, { -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f }, {  0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f },
-        { -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f }, {  0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f }, { -0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f }, {  0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f },
+        { -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f }, {  0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 0.0f }, { -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 1.0f }, {  0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f },
+        {  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 0.0f }, { -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 0.0f }, {  0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 1.0f }, { -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 1.0f },
+        { -0.5f,  0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 0.0f }, { -0.5f,  0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 0.0f }, { -0.5f, -0.5f,  0.5f, -1.0f,  0.0f,  0.0f,  0.0f, 1.0f }, { -0.5f, -0.5f, -0.5f, -1.0f,  0.0f,  0.0f,  1.0f, 1.0f },
+        {  0.5f,  0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 0.0f }, {  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 0.0f }, {  0.5f, -0.5f, -0.5f,  1.0f,  0.0f,  0.0f,  0.0f, 1.0f }, {  0.5f, -0.5f,  0.5f,  1.0f,  0.0f,  0.0f,  1.0f, 1.0f },
+        { -0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 0.0f }, {  0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 0.0f }, { -0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  0.0f, 1.0f }, {  0.5f,  0.5f, -0.5f,  0.0f,  1.0f,  0.0f,  1.0f, 1.0f },
+        { -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 0.0f }, {  0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 0.0f }, { -0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  0.0f, 1.0f }, {  0.5f, -0.5f,  0.5f,  0.0f, -1.0f,  0.0f,  1.0f, 1.0f },
     };
 
     D3D11_BUFFER_DESC bd = {};
@@ -167,12 +237,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     D3D11_SUBRESOURCE_DATA InitDataIdx = {}; InitDataIdx.pSysMem = indices;
     graphics.GetDevice()->CreateBuffer(&ibd, &InitDataIdx, &g_pIndexBuffer);
 
+    // プレイヤー用テクスチャのロード
+    LoadTextureFromFile(graphics.GetDevice(), L"texture.png", &g_pTextureRV);
+
+    // 敵用テクスチャのロード 
+    LoadTextureFromFile(graphics.GetDevice(), L"texture_enemy.png", &g_pTextureEnemyRV);
+
+
+
+    D3D11_SAMPLER_DESC sampDesc = {};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    graphics.GetDevice()->CreateSamplerState(&sampDesc, &g_pSamplerState);
+
     float t = 0.0f;
     int gameState = 0;
     float gameTimer = 10.0f;
 
-    // Player と Enemy を unique_ptr を使って安全に動的生成
-    // std::make_unique は、最も安全かつ高速にユニークポインタを生成する標準のやり方
     std::unique_ptr<Player> player = std::make_unique<Player>();
     std::unique_ptr<Enemy>  enemy = std::make_unique<Enemy>();
 
@@ -209,18 +292,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             }
             else if (gameState == 1)
             {
-                // ポインタ型になったため、ドット(.) ではなくアロー演算子(->) で関数を呼び出し
                 player->Update(deltaTime);
-
-                // プレイヤーの座標を敵に教えて、逃げさせる
-                enemy->Update(deltaTime, player->GetPosX(), player->GetPosY());
+                enemy->Update(deltaTime, player->GetPosX(), player->GetPosY()); // 逃げるAI
 
                 gameTimer -= deltaTime;
                 if (gameTimer <= 0.0f) {
                     gameState = 3;
                 }
 
-              
                 float pX = player->GetPosX(); float pY = player->GetPosY();
                 float eX = enemy->GetPosX();  float eY = enemy->GetPosY();
                 float size = 0.6f;
@@ -235,8 +314,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             else if (gameState == 2 || gameState == 3)
             {
                 if (GetAsyncKeyState(VK_SPACE) & 0x8000) {
-                    // リセット（再Spawn）処理も make_unique を呼び直すだけで、
-                    // 古いメモリはC++が裏側で自動的かつ完全に delete（解放）。メモリリークの心配ゼロ
                     player = std::make_unique<Player>();
                     enemy = std::make_unique<Enemy>();
                     gameState = 0;
@@ -274,28 +351,35 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
                 ID3D11Buffer* cbPtr = graphics.GetConstantBuffer();
                 ctx->VSSetConstantBuffers(0, 1, &cbPtr);
-                ctx->PSSetShader(g_pPixelShader, nullptr, 0);
+
+                // テクスチャとサンプラーをセット
+                ctx->PSSetShaderResources(0, 1, &g_pTextureRV);
+                ctx->PSSetSamplers(0, 1, &g_pSamplerState);
+
                 UINT stride = sizeof(SimpleVertex); UINT offset = 0;
                 ctx->IASetVertexBuffers(0, 1, &g_pVertexBuffer, &stride, &offset);
                 ctx->IASetIndexBuffer(g_pIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
                 ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-                // ---  プレイヤーの描画（赤色）---
-                // プレイヤー用シェーダーをセット
+                // --- プレイヤーの描画（通常シェーダー） ---
                 ctx->PSSetShader(g_pPixelShader, nullptr, 0);
+                // プレイヤー用テクスチャをバインド
+                ctx->PSSetShaderResources(0, 1, &g_pTextureRV);
                 cb.mWorld = XMMatrixTranspose(player->GetWorldMatrix(t));
                 ctx->UpdateSubresource(graphics.GetConstantBuffer(), 0, nullptr, &cb, 0, 0);
                 ctx->DrawIndexed(36, 0, 0);
-                
-                // ---  敵の描画（緑色）---
+
+                // --- 敵の描画（敵用シェーダー） ---
                 if (enemy->IsAlive()) {
-                    // 敵用シェーダーに切り替え
                     ctx->PSSetShader(g_pPixelShaderEnemy, nullptr, 0);
+                    // 敵用テクスチャに切り替え
+                    ctx->PSSetShaderResources(0, 1, &g_pTextureEnemyRV);
                     cb.mWorld = XMMatrixTranspose(enemy->GetWorldMatrix(t));
                     ctx->UpdateSubresource(graphics.GetConstantBuffer(), 0, nullptr, &cb, 0, 0);
                     ctx->DrawIndexed(36, 0, 0);
                 }
             }
+
             // --------------------------------------------------------
             // ④ 画面の最前面への文字の描画
             // --------------------------------------------------------
@@ -324,12 +408,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             graphics.EndRender();
         }
     }
+
+    // 終了時解放
+    if (g_pSamplerState)     g_pSamplerState->Release();
+    if (g_pTextureEnemyRV)    g_pTextureEnemyRV->Release();
+    if (g_pTextureRV)        g_pTextureRV->Release();
     if (g_pIndexBuffer)      g_pIndexBuffer->Release();
     if (g_pVertexBuffer)     g_pVertexBuffer->Release();
     if (g_pVertexLayout)     g_pVertexLayout->Release();
     if (g_pVertexShader)     g_pVertexShader->Release();
     if (g_pPixelShaderEnemy) g_pPixelShaderEnemy->Release();
     if (g_pPixelShader)      g_pPixelShader->Release();
+
+    CoUninitialize();
     return (int)msg.wParam;
 }
-

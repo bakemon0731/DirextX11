@@ -5,16 +5,22 @@ cbuffer ConstantBuffer : register(b0)
     matrix g_Projection;
 }
 
+// テクスチャとサンプラーの定義
+Texture2D g_Texture : register(t0);
+SamplerState g_Sampler : register(s0);
+
 struct VS_INPUT
 {
     float4 pos : POSITION;
     float3 normal : NORMAL;
+    float2 uv : TEXCOORD0;
 };
 
 struct VS_OUTPUT
 {
     float4 pos : SV_POSITION;
     float3 normal : TEXCOORD0;
+    float2 uv : TEXCOORD1;
 };
 
 VS_OUTPUT VS(VS_INPUT input)
@@ -28,6 +34,7 @@ VS_OUTPUT VS(VS_INPUT input)
 
     // Transform the normal so lighting follows the rotation
     output.normal = mul(input.normal, (float3x3) g_World);
+    output.uv = input.uv;
 
     return output;
 }
@@ -46,9 +53,10 @@ float4 PS(VS_OUTPUT input) : SV_Target
     float ambient = 0.2f;
     float finalBrightness = lightIntensity + ambient;
 
-    // Multiply the base red color by the brightness
-    float4 baseColor = float4(1.0f, 0.0f, 0.0f, 1.0f);
-    return baseColor * finalBrightness;
+    // 単色のかわりにテクスチャから色を取得
+    float4 texColor = g_Texture.Sample(g_Sampler, input.uv);
+    
+    return texColor * finalBrightness;
 }
 
 // 敵用のピクセルシェーダー（例：緑色）
@@ -60,7 +68,9 @@ float4 PS_Enemy(VS_OUTPUT input) : SV_Target
     float ambient = 0.2f;
     float finalBrightness = lightIntensity + ambient;
 
-    float4 baseColor = float4(0.0f, 1.0f, 0.0f, 1.0f); // 緑 (R, G, B, A)
-    return baseColor * finalBrightness;
+    // 単色のかわりにテクスチャから色を取得
+    float4 texColor = g_Texture.Sample(g_Sampler, input.uv);
+    
+    return texColor * finalBrightness;
 }
 
