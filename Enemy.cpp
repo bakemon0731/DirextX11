@@ -6,10 +6,10 @@ using namespace DirectX;
 
 Enemy::Enemy()
 {
-    m_posX = 1.2f;
+    m_posX = 0.0f;
     m_posY = 0.0f;
     // 逃げるスピード
-    m_speed = 1.0f;
+    m_speed = 1.5f;
     m_isAlive = true; 
 }
 
@@ -26,8 +26,8 @@ void Enemy::Update(float deltaTime, float playerX, float playerY)
     // 2点間の距離を計算 (三平方の定理: √(dx^2 + dy^2))
     float distance = sqrtf(dx * dx + dy * dy);
 
-    // プレイヤーとの距離が 4.0 未満のときだけ逃げる
-    float escapeRadius = 10.0f;
+    // プレイヤーとの距離が 1.0 未満のときだけ逃げる
+    float escapeRadius = 1.0f;
 
     if (distance < escapeRadius&& distance > 0.0001f)
     {

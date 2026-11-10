@@ -5,19 +5,20 @@ using namespace DirectX;
 
 Player::Player()
 {
-    m_posX = 0.0f;
+    // 左端（-2.0f）の真ん中（0.0f）からスタート
+    m_posX = -2.0f;
     m_posY = 0.0f;
-    m_speed = 1.5f; // ★1秒間に1.5単位動くという絶対速度に設定
+    m_speed = 1.0f; // 1秒間に1.5単位動くという絶対速度に設定
 }
 
 Player::~Player()
 {
 }
 
-// ★デルタタイムを計算式に乗算します
+// デルタタイムを計算式に乗算
 void Player::Update(float deltaTime)
 {
-    // 移動量 = スピード * 経過時間（これでどのPCでも同じ速度になります！）
+    // 移動量 = スピード * 経過時間（これでどのPCでも同じ速度）
     float moveAmount = m_speed * deltaTime;
 
     if (GetAsyncKeyState(VK_LEFT) & 0x8000) { m_posX -= moveAmount; }
