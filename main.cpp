@@ -20,12 +20,13 @@ const UINT SCREEN_HEIGHT = 600;
 ID3D11VertexShader* g_pVertexShader = nullptr;
 ID3D11PixelShader* g_pPixelShader = nullptr;
 ID3D11PixelShader* g_pPixelShaderEnemy = nullptr; // 敵用ピクセルシェーダー
+ID3D11PixelShader* g_pPixelShaderMono = nullptr;  // ★追加：モノクロ用ピクセルシェーダー
 ID3D11InputLayout* g_pVertexLayout = nullptr;
 ID3D11Buffer* g_pVertexBuffer = nullptr;
 ID3D11Buffer* g_pIndexBuffer = nullptr;
-ID3D11ShaderResourceView* g_pTextureRV = nullptr;  // テクスチャ
-ID3D11ShaderResourceView* g_pTextureEnemyRV = nullptr;
-ID3D11SamplerState* g_pSamplerState = nullptr;     // サンプラー
+ID3D11ShaderResourceView* g_pTextureRV = nullptr;      // プレイヤー用テクスチャ
+ID3D11ShaderResourceView* g_pTextureEnemyRV = nullptr; // 敵用テクスチャ
+ID3D11SamplerState* g_pSamplerState = nullptr;         // サンプラー
 
 struct ConstantBufferData {
     XMMATRIX mWorld;
@@ -33,7 +34,7 @@ struct ConstantBufferData {
     XMMATRIX mProjection;
 };
 
-// UV座標（tu, tv）を追加した頂点構造体
+// UV座標（tu, tv）を持つ頂点構造体
 struct SimpleVertex {
     float x, y, z;
     float nx, ny, nz;
@@ -100,7 +101,6 @@ bool LoadTextureFromFile(ID3D11Device* pDevice, const wchar_t* filename, ID3D11S
     HRESULT hr = CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pFactory));
     if (FAILED(hr)) return false;
 
-    // exeのある場所から探す、なければそのまま
     std::wstring fullPath = GetExeDirPath(filename);
     IWICBitmapDecoder* pDecoder = nullptr;
     hr = pFactory->CreateDecoderFromFilename(fullPath.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnLoad, &pDecoder);
@@ -156,14 +156,13 @@ bool LoadTextureFromFile(ID3D11Device* pDevice, const wchar_t* filename, ID3D11S
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
-    // WICを使うためのCOM初期化
     CoInitialize(nullptr);
 
     WNDCLASSEX wcex = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr, nullptr, L"DX11Class", nullptr };
     RegisterClassEx(&wcex);
     RECT rc = { 0, 0, (LONG)SCREEN_WIDTH, (LONG)SCREEN_HEIGHT };
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    HWND hWnd = CreateWindow(L"DX11Class", L"DirectX 11 統合バージョン", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, hInstance, nullptr);
+    HWND hWnd = CreateWindow(L"DX11Class", L"DirectX 11 ポストエフェクト対応版", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, hInstance, nullptr);
     ShowWindow(hWnd, nCmdShow);
 
     Graphics graphics;
@@ -185,7 +184,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         return 0;
     }
 
-    // 入力レイアウト（POSITION, NORMAL, TEXCOORD）
+    // 入力レイアウト
     D3D11_INPUT_ELEMENT_DESC layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -213,7 +212,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     pPSEnemyBlob->Release();
     if (FAILED(hr)) { MessageBoxW(nullptr, L"CreatePixelShader(Enemy) に失敗しました", L"エラー", MB_OK); CoUninitialize(); return 0; }
 
-    // ---- 頂点データ（UV座標付き立方体） ----
+    // ---- ピクセルシェーダー（モノクロ用） ----
+    ID3DBlob* pPSMonoBlob = nullptr;
+    if (!CompileShader(L"Shader.hlsl", "PS_Monochrome", "ps_4_0", &pPSMonoBlob)) { CoUninitialize(); return 0; }
+    hr = graphics.GetDevice()->CreatePixelShader(pPSMonoBlob->GetBufferPointer(), pPSMonoBlob->GetBufferSize(), nullptr, &g_pPixelShaderMono);
+    pPSMonoBlob->Release();
+    if (FAILED(hr)) { MessageBoxW(nullptr, L"CreatePixelShader(Mono) に失敗しました", L"エラー", MB_OK); CoUninitialize(); return 0; }
+
+    // ---- 頂点データ（立方体） ----
     SimpleVertex vertices[] = {
         { -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 0.0f }, {  0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 0.0f }, { -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  0.0f, 1.0f }, {  0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f,  1.0f, 1.0f },
         {  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 0.0f }, { -0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 0.0f }, {  0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  0.0f, 1.0f }, { -0.5f, -0.5f,  0.5f,  0.0f,  0.0f,  1.0f,  1.0f, 1.0f },
@@ -237,13 +243,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     D3D11_SUBRESOURCE_DATA InitDataIdx = {}; InitDataIdx.pSysMem = indices;
     graphics.GetDevice()->CreateBuffer(&ibd, &InitDataIdx, &g_pIndexBuffer);
 
-    // プレイヤー用テクスチャのロード
+    // ---- テクスチャとサンプラーのロード ----
     LoadTextureFromFile(graphics.GetDevice(), L"texture.png", &g_pTextureRV);
-
-    // 敵用テクスチャのロード 
     LoadTextureFromFile(graphics.GetDevice(), L"texture_enemy.png", &g_pTextureEnemyRV);
-
-
 
     D3D11_SAMPLER_DESC sampDesc = {};
     sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -293,11 +295,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             else if (gameState == 1)
             {
                 player->Update(deltaTime);
-                enemy->Update(deltaTime, player->GetPosX(), player->GetPosY()); // 逃げるAI
+                enemy->Update(deltaTime, player->GetPosX(), player->GetPosY());
 
                 gameTimer -= deltaTime;
                 if (gameTimer <= 0.0f) {
-                    gameState = 3;
+                    gameState = 3; // タイムアップ (ゲームオーバー)
                 }
 
                 float pX = player->GetPosX(); float pY = player->GetPosY();
@@ -308,7 +310,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
                     pY + size > eY && pY < eY + size)
                 {
                     enemy->Destroy();
-                    gameState = 2;
+                    gameState = 2; // ゲームクリア
                 }
             }
             else if (gameState == 2 || gameState == 3)
@@ -334,7 +336,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             // --------------------------------------------------------
             // ③ 【3Dオブジェクトの描画】
             // --------------------------------------------------------
-            if (gameState == 1 || gameState == 2)
+            if (gameState == 1 || gameState == 2 || gameState == 3)
             {
                 ConstantBufferData cb;
                 XMVECTOR Eye = XMVectorSet(0.0f, 2.0f, -4.0f, 0.0f);
@@ -352,8 +354,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
                 ID3D11Buffer* cbPtr = graphics.GetConstantBuffer();
                 ctx->VSSetConstantBuffers(0, 1, &cbPtr);
 
-                // テクスチャとサンプラーをセット
-                ctx->PSSetShaderResources(0, 1, &g_pTextureRV);
                 ctx->PSSetSamplers(0, 1, &g_pSamplerState);
 
                 UINT stride = sizeof(SimpleVertex); UINT offset = 0;
@@ -361,18 +361,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
                 ctx->IASetIndexBuffer(g_pIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
                 ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-                // --- プレイヤーの描画（通常シェーダー） ---
-                ctx->PSSetShader(g_pPixelShader, nullptr, 0);
-                // プレイヤー用テクスチャをバインド
+                // --- プレイヤーの描画 ---
+                if (gameState == 3) {
+                    ctx->PSSetShader(g_pPixelShaderMono, nullptr, 0); // タイムアップ時はモノクロ
+                }
+                else {
+                    ctx->PSSetShader(g_pPixelShader, nullptr, 0);
+                }
                 ctx->PSSetShaderResources(0, 1, &g_pTextureRV);
                 cb.mWorld = XMMatrixTranspose(player->GetWorldMatrix(t));
                 ctx->UpdateSubresource(graphics.GetConstantBuffer(), 0, nullptr, &cb, 0, 0);
                 ctx->DrawIndexed(36, 0, 0);
 
-                // --- 敵の描画（敵用シェーダー） ---
+                // --- 敵の描画 ---
                 if (enemy->IsAlive()) {
-                    ctx->PSSetShader(g_pPixelShaderEnemy, nullptr, 0);
-                    // 敵用テクスチャに切り替え
+                    if (gameState == 3) {
+                        ctx->PSSetShader(g_pPixelShaderMono, nullptr, 0); // タイムアップ時はモノクロ
+                    }
+                    else {
+                        ctx->PSSetShader(g_pPixelShaderEnemy, nullptr, 0);
+                    }
                     ctx->PSSetShaderResources(0, 1, &g_pTextureEnemyRV);
                     cb.mWorld = XMMatrixTranspose(enemy->GetWorldMatrix(t));
                     ctx->UpdateSubresource(graphics.GetConstantBuffer(), 0, nullptr, &cb, 0, 0);
@@ -411,12 +419,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     // 終了時解放
     if (g_pSamplerState)     g_pSamplerState->Release();
-    if (g_pTextureEnemyRV)    g_pTextureEnemyRV->Release();
+    if (g_pTextureEnemyRV)   g_pTextureEnemyRV->Release();
     if (g_pTextureRV)        g_pTextureRV->Release();
     if (g_pIndexBuffer)      g_pIndexBuffer->Release();
     if (g_pVertexBuffer)     g_pVertexBuffer->Release();
     if (g_pVertexLayout)     g_pVertexLayout->Release();
     if (g_pVertexShader)     g_pVertexShader->Release();
+    if (g_pPixelShaderMono)  g_pPixelShaderMono->Release();  // ★追加
     if (g_pPixelShaderEnemy) g_pPixelShaderEnemy->Release();
     if (g_pPixelShader)      g_pPixelShader->Release();
 
