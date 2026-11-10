@@ -32,6 +32,7 @@ VS_OUTPUT VS(VS_INPUT input)
     return output;
 }
 
+// プレイヤー用ピクセルシェーダー
 float4 PS(VS_OUTPUT input) : SV_Target
 {
     // Directional light from the upper right
@@ -47,6 +48,19 @@ float4 PS(VS_OUTPUT input) : SV_Target
 
     // Multiply the base red color by the brightness
     float4 baseColor = float4(1.0f, 0.0f, 0.0f, 1.0f);
+    return baseColor * finalBrightness;
+}
+
+// 敵用のピクセルシェーダー（例：緑色）
+float4 PS_Enemy(VS_OUTPUT input) : SV_Target
+{
+    float3 lightDir = normalize(float3(1.0f, 1.0f, -1.0f));
+    float3 normal = normalize(input.normal);
+    float lightIntensity = saturate(dot(normal, lightDir));
+    float ambient = 0.2f;
+    float finalBrightness = lightIntensity + ambient;
+
+    float4 baseColor = float4(0.0f, 1.0f, 0.0f, 1.0f); // 緑 (R, G, B, A)
     return baseColor * finalBrightness;
 }
 

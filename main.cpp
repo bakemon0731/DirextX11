@@ -5,8 +5,8 @@
 #include <d3d11.h>
 #include <d3dcompiler.h> 
 #include <directxmath.h> 
-#include <memory>     // ★スマートポインタ追加：std::unique_ptr を使うためのヘッダー
-#include <string>     // ★追加：シェーダーのパス取得に std::wstring を使う
+#include <memory>     
+#include <string>     
 #include "Player.h" 
 #include "Enemy.h" 
 #include "Graphics.h" 
@@ -18,6 +18,7 @@ const UINT SCREEN_HEIGHT = 600;
 
 ID3D11VertexShader* g_pVertexShader = nullptr;
 ID3D11PixelShader* g_pPixelShader = nullptr;
+ID3D11PixelShader* g_pPixelShaderEnemy = nullptr;
 ID3D11InputLayout* g_pVertexLayout = nullptr;
 ID3D11Buffer* g_pVertexBuffer = nullptr;
 ID3D11Buffer* g_pIndexBuffer = nullptr;
@@ -53,7 +54,7 @@ void RenderText(HWND hWnd, IDXGISwapChain* swapChain, const wchar_t* text, int t
     ReleaseDC(hWnd, hdc);
 }
 
-// ★追加：exeと同じフォルダのパスを返す
+// exeと同じフォルダのパスを返す
 std::wstring GetExeDirPath(const wchar_t* fileName) {
     wchar_t buf[MAX_PATH];
     GetModuleFileNameW(nullptr, buf, MAX_PATH);
@@ -62,7 +63,7 @@ std::wstring GetExeDirPath(const wchar_t* fileName) {
     return path + fileName;
 }
 
-// ★追加：シェーダーをコンパイルし、失敗したらメッセージを表示する
+// シェーダーをコンパイルし、失敗したらメッセージを表示する
 bool CompileShader(const wchar_t* fileName, const char* entry, const char* target, ID3DBlob** ppBlob) {
     ID3DBlob* pError = nullptr;
 
@@ -125,16 +126,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         return 0;
     }
 
-    // ---- ピクセルシェーダー ----
+    // ---- ピクセルシェーダー（プレイヤー用）----
     ID3DBlob* pPSBlob = nullptr;
     if (!CompileShader(L"Shader.hlsl", "PS", "ps_4_0", &pPSBlob)) { return 0; }
-
     hr = graphics.GetDevice()->CreatePixelShader(pPSBlob->GetBufferPointer(), pPSBlob->GetBufferSize(), nullptr, &g_pPixelShader);
     pPSBlob->Release();
     if (FAILED(hr)) {
         MessageBoxW(nullptr, L"CreatePixelShader に失敗しました", L"エラー", MB_OK);
         return 0;
     }
+
+    // ----ピクセルシェーダー（敵用）----
+    ID3DBlob* pPSEnemyBlob = nullptr;
+    if (!CompileShader(L"Shader.hlsl", "PS_Enemy", "ps_4_0", &pPSEnemyBlob)) { return 0; }
+    hr = graphics.GetDevice()->CreatePixelShader(pPSEnemyBlob->GetBufferPointer(), pPSEnemyBlob->GetBufferSize(), nullptr, &g_pPixelShaderEnemy);
+    pPSEnemyBlob->Release();
+    if (FAILED(hr)) { MessageBoxW(nullptr, L"CreatePixelShader(Enemy) に失敗しました", L"エラー", MB_OK);
+    return 0; }
 
     SimpleVertex vertices[] = {
         { -0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f }, {  0.5f,  0.5f, -0.5f,  0.0f,  0.0f, -1.0f }, { -0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f }, {  0.5f, -0.5f, -0.5f,  0.0f,  0.0f, -1.0f },
@@ -163,8 +171,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     int gameState = 0;
     float gameTimer = 10.0f;
 
-    // ★スマートポインタ追加：Player と Enemy を unique_ptr を使って安全に動的生成します
-    // std::make_unique は、最も安全かつ高速にユニークポインタを生成する標準のやり方です
+    // Player と Enemy を unique_ptr を使って安全に動的生成
+    // std::make_unique は、最も安全かつ高速にユニークポインタを生成する標準のやり方
     std::unique_ptr<Player> player = std::make_unique<Player>();
     std::unique_ptr<Enemy>  enemy = std::make_unique<Enemy>();
 
@@ -201,7 +209,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             }
             else if (gameState == 1)
             {
-                // ポインタ型になったため、ドット(.) ではなくアロー演算子(->) で関数を呼び出します
+                // ポインタ型になったため、ドット(.) ではなくアロー演算子(->) で関数を呼び出し
                 player->Update(deltaTime);
 
                 // プレイヤーの座標を敵に教えて、逃げさせる
@@ -228,7 +236,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             {
                 if (GetAsyncKeyState(VK_SPACE) & 0x8000) {
                     // リセット（再Spawn）処理も make_unique を呼び直すだけで、
-                    // 古いメモリはC++が裏側で自動的かつ完全に delete（解放）してくれます。メモリリークの心配ゼロです！
+                    // 古いメモリはC++が裏側で自動的かつ完全に delete（解放）。メモリリークの心配ゼロ
                     player = std::make_unique<Player>();
                     enemy = std::make_unique<Enemy>();
                     gameState = 0;
@@ -271,12 +279,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
                 ctx->IASetVertexBuffers(0, 1, &g_pVertexBuffer, &stride, &offset);
                 ctx->IASetIndexBuffer(g_pIndexBuffer, DXGI_FORMAT_R16_UINT, 0);
                 ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                // アロー演算子(->) による行列の取得
+
+                // ---  プレイヤーの描画（赤色）---
+                // プレイヤー用シェーダーをセット
+                ctx->PSSetShader(g_pPixelShader, nullptr, 0);
                 cb.mWorld = XMMatrixTranspose(player->GetWorldMatrix(t));
                 ctx->UpdateSubresource(graphics.GetConstantBuffer(), 0, nullptr, &cb, 0, 0);
                 ctx->DrawIndexed(36, 0, 0);
-                // スマートポインタ追加
+                
+                // ---  敵の描画（緑色）---
                 if (enemy->IsAlive()) {
+                    // 敵用シェーダーに切り替え
+                    ctx->PSSetShader(g_pPixelShaderEnemy, nullptr, 0);
                     cb.mWorld = XMMatrixTranspose(enemy->GetWorldMatrix(t));
                     ctx->UpdateSubresource(graphics.GetConstantBuffer(), 0, nullptr, &cb, 0, 0);
                     ctx->DrawIndexed(36, 0, 0);
@@ -314,6 +328,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     if (g_pVertexBuffer)     g_pVertexBuffer->Release();
     if (g_pVertexLayout)     g_pVertexLayout->Release();
     if (g_pVertexShader)     g_pVertexShader->Release();
+    if (g_pPixelShaderEnemy) g_pPixelShaderEnemy->Release();
     if (g_pPixelShader)      g_pPixelShader->Release();
     return (int)msg.wParam;
 }
