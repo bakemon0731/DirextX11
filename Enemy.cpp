@@ -27,7 +27,7 @@ void Enemy::Update(float deltaTime, float playerX, float playerY)
     float distance = sqrtf(dx * dx + dy * dy);
 
     // プレイヤーとの距離が 1.0 未満のときだけ逃げる
-    float escapeRadius = 1.0f;
+    float escapeRadius = 1.2f;
 
     if (distance < escapeRadius&& distance > 0.0001f)
     {

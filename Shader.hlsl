@@ -23,6 +23,45 @@ struct VS_OUTPUT
     float2 uv : TEXCOORD2; // UV座標
 };
 
+// ピクセルシェーダーの入力構造体などの前提
+struct PS_INPUT
+{
+    float4 position : SV_POSITION;
+    float3 normal : NORMAL;
+    float3 worldPos : TEXCOORD0; // 必要に応じてワールド座標や視線ベクトルを渡す
+    float2 uv : TEXCOORD1;
+};
+
+// 外から渡す定数バッファ（カメラ位置やリムライトの色・強さなど）
+cbuffer RimBuffer : register(b1)
+{
+    float3 c_eyePosition;
+    float c_rimPower; // 収束の鋭さ
+    float3 c_rimColor; // リムライトの色 
+    float c_dummy;
+}
+
+float4 PS(PS_INPUT input) : SV_Target
+{
+    // 法線の正規化
+    float3 N = normalize(input.normal);
+    
+    // 視線ベクトルの計算 (カメラ位置 - ピクセルのワールド座標)
+    float3 V = normalize(c_eyePosition - input.worldPos);
+    
+    // リムライト係数の計算 (内積が小さい＝輪郭ほど値が大きくなる)
+    float rim = 1.0 - saturate(dot(N, V));
+    rim = pow(rim, c_rimPower); // 収束の鋭さを調整
+    
+    // テクスチャカラーとライティングの合成
+    float4 baseColor = g_Texture.Sample(g_Sampler, input.uv);
+    
+    // リムライトの色を加算
+    float3 finalColor = baseColor.rgb + (c_rimColor * rim);
+
+    return float4(finalColor, baseColor.a);
+}
+
 VS_OUTPUT VS(VS_INPUT input)
 {
     VS_OUTPUT output;
