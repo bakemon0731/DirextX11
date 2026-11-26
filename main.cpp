@@ -9,6 +9,7 @@
 #include "Player.h" 
 #include "Enemy.h" 
 #include "Graphics.h" 
+#include "NetworkManager.h"
 
 #pragma comment(lib, "windowscodecs.lib")
 
@@ -20,7 +21,7 @@ const UINT SCREEN_HEIGHT = 600;
 ID3D11VertexShader* g_pVertexShader = nullptr;
 ID3D11PixelShader* g_pPixelShader = nullptr;
 ID3D11PixelShader* g_pPixelShaderEnemy = nullptr; // 敵用ピクセルシェーダー
-ID3D11PixelShader* g_pPixelShaderMono = nullptr;  // ★追加：モノクロ用ピクセルシェーダー
+ID3D11PixelShader* g_pPixelShaderMono = nullptr;  // モノクロ用ピクセルシェーダー
 ID3D11InputLayout* g_pVertexLayout = nullptr;
 ID3D11Buffer* g_pVertexBuffer = nullptr;
 ID3D11Buffer* g_pIndexBuffer = nullptr;
@@ -158,11 +159,41 @@ bool LoadTextureFromFile(ID3D11Device* pDevice, const wchar_t* filename, ID3D11S
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     CoInitialize(nullptr);
 
+    NetworkManager networkManager;
+
+    if (!networkManager.Initialize())
+    {
+        wchar_t message[128];
+
+        wsprintfW(
+            message,
+            L"Winsock initialization failed.\nError code: %d",
+            networkManager.GetLastErrorCode()
+        );
+
+        MessageBoxW(
+            nullptr,
+            message,
+            L"Network Error",
+            MB_OK | MB_ICONERROR
+        );
+
+        CoUninitialize();
+        return 0;
+    }
+
+    MessageBoxW(
+        nullptr,
+        L"Winsock 2.2 initialization succeeded!",
+        L"Network Test",
+        MB_OK | MB_ICONINFORMATION
+    );
+
     WNDCLASSEX wcex = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr, nullptr, L"DX11Class", nullptr };
     RegisterClassEx(&wcex);
     RECT rc = { 0, 0, (LONG)SCREEN_WIDTH, (LONG)SCREEN_HEIGHT };
     AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-    HWND hWnd = CreateWindow(L"DX11Class", L"DirectX 11 ポストエフェクト対応版", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, hInstance, nullptr);
+    HWND hWnd = CreateWindow(L"DX11Class", L"DirectX 11", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, hInstance, nullptr);
     ShowWindow(hWnd, nCmdShow);
 
     Graphics graphics;
@@ -417,6 +448,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         }
     }
 
+    if (!networkManager.Shutdown())
+    {
+        wchar_t message[128];
+
+        wsprintfW(
+            message,
+            L"Winsock shutdown failed.\nError code: %d",
+            networkManager.GetLastErrorCode()
+        );
+
+        MessageBoxW(
+            nullptr,
+            message,
+            L"Network Error",
+            MB_OK | MB_ICONERROR
+        );
+    }
+
     // 終了時解放
     if (g_pSamplerState)     g_pSamplerState->Release();
     if (g_pTextureEnemyRV)   g_pTextureEnemyRV->Release();
@@ -425,7 +474,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     if (g_pVertexBuffer)     g_pVertexBuffer->Release();
     if (g_pVertexLayout)     g_pVertexLayout->Release();
     if (g_pVertexShader)     g_pVertexShader->Release();
-    if (g_pPixelShaderMono)  g_pPixelShaderMono->Release();  // ★追加
+    if (g_pPixelShaderMono)  g_pPixelShaderMono->Release();  
     if (g_pPixelShaderEnemy) g_pPixelShaderEnemy->Release();
     if (g_pPixelShader)      g_pPixelShader->Release();
 

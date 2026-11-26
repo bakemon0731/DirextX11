@@ -23,45 +23,6 @@ struct VS_OUTPUT
     float2 uv : TEXCOORD2; // UV座標
 };
 
-// ピクセルシェーダーの入力構造体などの前提
-struct PS_INPUT
-{
-    float4 position : SV_POSITION;
-    float3 normal : NORMAL;
-    float3 worldPos : TEXCOORD0; // 必要に応じてワールド座標や視線ベクトルを渡す
-    float2 uv : TEXCOORD1;
-};
-
-// 外から渡す定数バッファ（カメラ位置やリムライトの色・強さなど）
-cbuffer RimBuffer : register(b1)
-{
-    float3 c_eyePosition;
-    float c_rimPower; // 収束の鋭さ
-    float3 c_rimColor; // リムライトの色 
-    float c_dummy;
-}
-
-float4 PS(PS_INPUT input) : SV_Target
-{
-    // 法線の正規化
-    float3 N = normalize(input.normal);
-    
-    // 視線ベクトルの計算 (カメラ位置 - ピクセルのワールド座標)
-    float3 V = normalize(c_eyePosition - input.worldPos);
-    
-    // リムライト係数の計算 (内積が小さい＝輪郭ほど値が大きくなる)
-    float rim = 1.0 - saturate(dot(N, V));
-    rim = pow(rim, c_rimPower); // 収束の鋭さを調整
-    
-    // テクスチャカラーとライティングの合成
-    float4 baseColor = g_Texture.Sample(g_Sampler, input.uv);
-    
-    // リムライトの色を加算
-    float3 finalColor = baseColor.rgb + (c_rimColor * rim);
-
-    return float4(finalColor, baseColor.a);
-}
-
 VS_OUTPUT VS(VS_INPUT input)
 {
     VS_OUTPUT output;
@@ -84,25 +45,24 @@ float4 PS(VS_OUTPUT input) : SV_Target
     float3 lightDir = normalize(float3(1.0f, 1.0f, -1.0f)); // 光の方向
     float3 normal = normalize(input.normal);
 
-    //  ディフューズ（拡散反射）
+    // ディフューズ（拡散反射）
     float diff = saturate(dot(normal, lightDir));
     float ambient = 0.2f;
 
     // スペキュラーハイライト（Blinn-Phong反射）
-    // C++側のカメラ位置 (0.0f, 2.0f, -4.0f) と一致させる
     float3 eyePos = float3(0.0f, 2.0f, -4.0f);
     float3 viewDir = normalize(eyePos - input.worldPos); // 視線ベクトル
     
-    // 光ベクトルと視線ベクトルの「ハーフベクトルの計算」
+    // 光ベクトルと視線ベクトルのハーフベクトル計算
     float3 halfDir = normalize(lightDir + viewDir);
     
-    // 32.0f は「ツヤの鋭さ（光沢度）」。数字が大きいほどピンポイントで鋭く光る。
+    // 32.0f はツヤの鋭さ
     float spec = pow(saturate(dot(normal, halfDir)), 32.0f);
 
     // テクスチャから色を取得
     float4 texColor = g_Texture.Sample(g_Sampler, input.uv);
     
-    // 最終カラー合成 = (テクスチャ * 明るさ) + スペキュラー（白い反射光）
+    // 最終カラー合成 = (テクスチャ * 明るさ) + スペキュラー
     float3 finalColor = texColor.rgb * (diff + ambient) + float3(1.0f, 1.0f, 1.0f) * spec;
 
     return float4(finalColor, texColor.a);
