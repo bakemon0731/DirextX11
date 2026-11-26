@@ -1,4 +1,5 @@
-﻿#include <windows.h>
+﻿#include <winsock2.h>
+#include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h> 
 #include <directxmath.h> 
@@ -10,6 +11,8 @@
 #include "Enemy.h" 
 #include "Graphics.h" 
 #include "NetworkManager.h"
+#include "TCPServer.h"
+#include "TCPClient.h"
 
 #pragma comment(lib, "windowscodecs.lib")
 
@@ -160,20 +163,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     CoInitialize(nullptr);
 
     NetworkManager networkManager;
+    TCPServer tcpServer;
+    TCPClient tcpClient;
 
+    constexpr unsigned short PORT = 27015;
+
+    // Winsock初期化
     if (!networkManager.Initialize())
     {
-        wchar_t message[128];
-
-        wsprintfW(
-            message,
-            L"Winsock initialization failed.\nError code: %d",
-            networkManager.GetLastErrorCode()
-        );
-
         MessageBoxW(
             nullptr,
-            message,
+            L"Winsock initialization failed.",
             L"Network Error",
             MB_OK | MB_ICONERROR
         );
@@ -182,12 +182,115 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         return 0;
     }
 
-    MessageBoxW(
+    // ホストかクライアントか選択
+    int role = MessageBoxW(
         nullptr,
-        L"Winsock 2.2 initialization succeeded!",
+        L"ホストとして起動しますか？\n\n"
+        L"はい：ホスト\n"
+        L"いいえ：クライアント\n"
+        L"キャンセル：終了",
         L"Network Test",
-        MB_OK | MB_ICONINFORMATION
+        MB_YESNOCANCEL | MB_ICONQUESTION
     );
+
+    if (role == IDYES)
+    {
+        // サーバー起動
+        if (!tcpServer.Start(PORT))
+        {
+            wchar_t message[128];
+
+            swprintf_s(
+                message,
+                L"Server Start Failed. Error: %d",
+                tcpServer.GetLastErrorCode()
+            );
+
+            MessageBoxW(
+                nullptr,
+                message,
+                L"Network Error",
+                MB_OK | MB_ICONERROR
+            );
+
+            tcpServer.Shutdown();
+            networkManager.Shutdown();
+            CoUninitialize();
+            return 0;
+        }
+
+        MessageBoxW(
+            nullptr,
+            L"サーバーを起動しました。\n"
+            L"もう1つゲームを起動してクライアントを選択してください。",
+            L"Server",
+            MB_OK
+        );
+
+        // クライアントの接続を待つ
+        if (!tcpServer.AcceptClient())
+        {
+            MessageBoxW(
+                nullptr,
+                L"Client Accept Failed.",
+                L"Network Error",
+                MB_OK | MB_ICONERROR
+            );
+
+            tcpServer.Shutdown();
+            networkManager.Shutdown();
+            CoUninitialize();
+            return 0;
+        }
+
+        MessageBoxW(
+            nullptr,
+            L"クライアントとの接続に成功しました！",
+            L"Server",
+            MB_OK
+        );
+    }
+    else if (role == IDNO)
+    {
+        // サーバーに接続
+        if (!tcpClient.Connect("127.0.0.1", PORT))
+        {
+            wchar_t message[128];
+
+            swprintf_s(
+                message,
+                L"Connection Failed. Error: %d",
+                tcpClient.GetLastErrorCode()
+            );
+
+            MessageBoxW(
+                nullptr,
+                message,
+                L"Network Error",
+                MB_OK | MB_ICONERROR
+            );
+
+            tcpClient.Disconnect();
+            networkManager.Shutdown();
+            CoUninitialize();
+            return 0;
+        }
+
+        MessageBoxW(
+            nullptr,
+            L"サーバーとの接続に成功しました！",
+            L"Client",
+            MB_OK
+        );
+    }
+    else
+    {
+        tcpClient.Disconnect();
+        tcpServer.Shutdown();
+        networkManager.Shutdown();
+        CoUninitialize();
+        return 0;
+    }
 
     WNDCLASSEX wcex = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr, nullptr, L"DX11Class", nullptr };
     RegisterClassEx(&wcex);
@@ -314,7 +417,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             t += deltaTime * 0.5f;
 
             // --------------------------------------------------------
-            // ① ゲームの更新処理
+            // ゲームの更新処理
             // --------------------------------------------------------
             if (gameState == 0)
             {
@@ -354,7 +457,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             }
 
             // --------------------------------------------------------
-            // ② 画面クリア
+            // 画面クリア
             // --------------------------------------------------------
             float clearColor[4];
             if (gameState == 0) { clearColor[0] = 0.05f; clearColor[1] = 0.1f;  clearColor[2] = 0.2f;  clearColor[3] = 1.0f; }
@@ -365,7 +468,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             graphics.BeginRender(clearColor);
 
             // --------------------------------------------------------
-            // ③ 【3Dオブジェクトの描画】
+            // 【3Dオブジェクトの描画】
             // --------------------------------------------------------
             if (gameState == 1 || gameState == 2 || gameState == 3)
             {
@@ -420,7 +523,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             }
 
             // --------------------------------------------------------
-            // ④ 画面の最前面への文字の描画
+            //  画面の最前面への文字の描画
             // --------------------------------------------------------
             if (gameState == 0)
             {
@@ -448,19 +551,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         }
     }
 
+    tcpClient.Disconnect();
+    tcpServer.Shutdown();
+
     if (!networkManager.Shutdown())
     {
-        wchar_t message[128];
-
-        wsprintfW(
-            message,
-            L"Winsock shutdown failed.\nError code: %d",
-            networkManager.GetLastErrorCode()
-        );
-
         MessageBoxW(
             nullptr,
-            message,
+            L"Winsock shutdown failed.",
             L"Network Error",
             MB_OK | MB_ICONERROR
         );

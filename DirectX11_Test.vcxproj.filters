@@ -33,6 +33,12 @@
     <ClCompile Include="NetworkManager.cpp">
       <Filter>ソース ファイル\Network</Filter>
     </ClCompile>
+    <ClCompile Include="TCPServer.cpp">
+      <Filter>ソース ファイル\Network</Filter>
+    </ClCompile>
+    <ClCompile Include="TCPClient.cpp">
+      <Filter>ソース ファイル\Network</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Player.h">
@@ -45,6 +51,12 @@
       <Filter>ソース ファイル</Filter>
     </ClInclude>
     <ClInclude Include="NetworkManager.h">
+      <Filter>ソース ファイル\Network</Filter>
+    </ClInclude>
+    <ClInclude Include="TCPServer.h">
+      <Filter>ソース ファイル\Network</Filter>
+    </ClInclude>
+    <ClInclude Include="TCPClient.h">
       <Filter>ソース ファイル\Network</Filter>
     </ClInclude>
   </ItemGroup>
